@@ -29,15 +29,12 @@ def safe_get(url, params=None, retries=3):
 
 
 def get_companies_by_date(from_date, to_date, page):
-    response = safe_get(
-        f"{BASE_URL}/base_info_company_by_create_date/",
-        {
-            "created_from": from_date,
-            "created_to": to_date,
-            "page": page,
-            "limit": PAGE_LIMIT
-        }
-    )
+    url = f"{BASE_URL}/base_info_company_by_create_date/reg_time/{from_date}/to/{to_date}"
+    params = {
+        "page": page,
+        "limit": PAGE_LIMIT
+    }
+    response = safe_get(url, params=params)
     return response.get("data", [])
 
 
