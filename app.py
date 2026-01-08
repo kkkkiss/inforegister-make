@@ -8,7 +8,7 @@ app = Flask(__name__)
 API_KEY = os.getenv("INFOREGISTER_API_KEY")
 BASE_URL = "https://api.ir.ee"
 HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
+    "Authorization": API_KEY,
     "Content-Type": "application/json"
 }
 
