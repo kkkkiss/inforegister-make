@@ -1,109 +1,90 @@
-from flask import Flask, request, jsonify
 import requests
-import time
-import os
+import csv
+import sys
 
-app = Flask(__name__)
-
-API_KEY = os.getenv("INFOREGISTER_API_KEY")
+API_KEY = input("Введи API ключ: ").strip()
 BASE_URL = "https://api.ir.ee"
-HEADERS = {
-    "Authorization": API_KEY,
-    "Content-Type": "application/json"
-}
+HEADERS = {"Authorization": API_KEY}
 
-PAGE_LIMIT = 100
-REQUEST_DELAY = 0.2
+FROM_DATE = "2025-01-01"
+TO_DATE = "2025-03-01"
+LIMIT = 50
 
+def get_companies_by_date():
+    url = f"{BASE_URL}/base_info_company_by_create_date/reg_time/{FROM_DATE}/to/{TO_DATE}"
+    resp = requests.get(url, headers=HEADERS)
+    resp.raise_for_status()
+    return resp.json()[:LIMIT]
 
-def safe_get(url, params=None, retries=3):
-    for attempt in range(retries):
-        try:
-            r = requests.get(url, headers=HEADERS, params=params, timeout=20)
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            if attempt == retries - 1:
-                raise
-            time.sleep(2)
+def get_company_contacts(reg_code):
+    url = f"{BASE_URL}/premium/company_contacts/reg_code/{reg_code}"
+    resp = requests.get(url, headers=HEADERS)
+    if resp.status_code == 200:
+        return resp.json()
+    return {}
 
-
-def get_companies_by_date(from_date, to_date, page):
-    url = f"{BASE_URL}/base_info_company_by_create_date/reg_time/{from_date}/to/{to_date}"
-    params = {
-        "page": page,
-        "limit": PAGE_LIMIT
+def extract_data(base_info, contacts):
+    row = {
+        "reg_code": base_info.get("reg_code", ""),
+        "reg_time": base_info.get("reg_time", ""),
+        "company_name": base_info.get("company_name", ""),
+        "kmkr": base_info.get("kmkr", ""),
+        "full_address": "",
+        "email": "",
+        "person_country": "",
+        "person_code": "",
+        "person_name": ""
     }
-    response = safe_get(url, params=params)
-    return response.get("data", [])
-
-
-def get_company_details(reg_code):
-    return safe_get(
-        f"{BASE_URL}/premium/company_contactsl/reg_code/{reg_code}"
-    )
-
-
-@app.route("/run", methods=["POST"])
-def run():
-    body = request.json
-
-    from_date = body["from_date"]
-    to_date = body["to_date"]
-    target = body["target"]  # например 50 или 1000
-
-    results = []
-    page = 1
-
-    while len(results) < target:
-        companies = get_companies_by_date(from_date, to_date, page)
-        if not companies:
-            break
-
-        for company in companies:
-            if len(results) >= target:
+    
+    # Address from base_info
+    addr = base_info.get("base_info_address") or {}
+    if isinstance(addr, list) and addr:
+        addr = addr[0]
+    row["full_address"] = addr.get("full_address", "") if isinstance(addr, dict) else ""
+    
+    # Email from contacts
+    contact_list = contacts.get("base_info_contact") or []
+    if isinstance(contact_list, list):
+        for c in contact_list:
+            if "@" in str(c.get("contact", "")):
+                row["email"] = c.get("contact", "")
                 break
+    
+    # Person info
+    persons = base_info.get("base_info_persons") or []
+    if isinstance(persons, list) and persons:
+        p = persons[0]
+        row["person_country"] = p.get("country_code", "")
+        row["person_code"] = p.get("code", "")
+        row["person_name"] = p.get("name", "")
+    
+    return row
 
-            reg_code = company.get("registry_code")
-            if not reg_code:
-                continue
-
-            try:
-                details = get_company_details(reg_code)
-            except Exception:
-                continue
-
-            base_info = details.get("base_info", {})
-            address = details.get("base_info_address", {})
-            contact = details.get("base_info_contact", {})
-            persons = details.get("base_info_persons", [])
-
-            # фильтр: без VAT
-            if base_info.get("kmkr"):
-                continue
-
-            person = persons[0] if persons else {}
-
-            results.append({
-                "reg_time": base_info.get("reg_time", ""),
-                "company_name": base_info.get("company_name", ""),
-                "vat_number": base_info.get("kmkr", ""),
-                "full_address": address.get("full_address", ""),
-                "email": contact.get("contact", ""),
-                "beneficiary_country": person.get("country_code", ""),
-                "beneficiary_personal_code": person.get("code", ""),
-                "beneficiary_name": person.get("name", "")
-            })
-
-            time.sleep(REQUEST_DELAY)
-
-        page += 1
-
-    return jsonify({
-        "count": len(results),
-        "companies": results
-    })
-
+def main():
+    print(f"Загружаю компании за период {FROM_DATE} - {TO_DATE}...")
+    
+    companies = get_companies_by_date()
+    print(f"Найдено {len(companies)} компаний")
+    
+    results = []
+    for i, company in enumerate(companies):
+        reg_code = company.get("reg_code", "")
+        print(f"[{i+1}/{len(companies)}] {company.get('company_name', 'N/A')} ({reg_code})")
+        
+        contacts = get_company_contacts(reg_code) if reg_code else {}
+        row = extract_data(company, contacts)
+        results.append(row)
+    
+    # Save to CSV
+    output_file = "companies_estonia.csv"
+    fieldnames = ["reg_code", "reg_time", "company_name", "kmkr", "full_address", "email", "person_country", "person_code", "person_name"]
+    
+    with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(results)
+    
+    print(f"\nГотово! Сохранено в {output_file}")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    main()
